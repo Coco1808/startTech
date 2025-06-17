@@ -42,7 +42,9 @@ export function useFinMindData(dataId: string, startDate?: string, endDate?: str
         const result: FinMindDataResponse = await response.json();
 
         if (result.status === 200 && result.data) {
+          console.log("useFinMindData: Data fetched successfully, attempting to set state:", result.data);
           setData(result.data);
+          console.log("useFinMindData: Data successfully set in state.");
         } else {
           setError(result.msg || 'Failed to fetch data');
         }

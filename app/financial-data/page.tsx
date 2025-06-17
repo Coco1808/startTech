@@ -32,20 +32,15 @@ export default function FinancialDataPage() {
   const stockId = '2867'; // 三商壽的股票代碼
   const { data: finMindData, loading, error } = useFinMindData(stockId, '2019-01-01', new Date().toISOString().slice(0, 10));
 
-  const [hasMounted, setHasMounted] = useState(false);
   const [viewMode, setViewMode] = useState<'monthly' | 'yearly'>('monthly'); // Added state for view mode
-
-  useEffect(() => {
-    setHasMounted(true);
-  }, []);
 
   // Add console logs for debugging
   useEffect(() => {
     if (finMindData) {
       console.log("FinMind Raw Data:", finMindData);
     }
-    console.log(`Rendering Chart: loading=${loading}, error=${error}, finMindData=${!!finMindData}, finMindData.length=${finMindData ? finMindData.length : 0}, hasMounted=${hasMounted}`);
-  }, [finMindData, loading, error, hasMounted]);
+    console.log(`Rendering Chart: loading=${loading}, error=${error}, finMindData=${!!finMindData}, finMindData.length=${finMindData ? finMindData.length : 0}`);
+  }, [finMindData, loading, error]);
 
   // Helper function to calculate Year-over-Year Growth (YoY)
   const calculateYoyGrowth = (currentItem: FinMindMonthlyRevenueData, allData: FinMindMonthlyRevenueData[]): number | null => {
@@ -77,7 +72,7 @@ export default function FinancialDataPage() {
       const processedData = data
         .map(item => {
           const date = new Date(item.date as string);
-          const parsedMonthlyRevenue = parseFloat(String(item.revenue)) / 1000; // Convert to thousands
+          const parsedMonthlyRevenue = parseFloat(String(item.revenue)) / 1000; // Re-add: Convert to thousands (千元)
           const calculatedYoyGrowth = calculateYoyGrowth(item, data);
 
           return {
@@ -87,14 +82,16 @@ export default function FinancialDataPage() {
           };
         })
         .sort((a, b) => a.date - b.date);
-        console.log("processChartData - Monthly Mode Result:", processedData);
+        console.log("processChartData - Monthly Mode Result (sample):");
+        processedData.slice(0, 5).forEach(d => console.log(d)); // Log first 5
+        processedData.slice(-5).forEach(d => console.log(d)); // Log last 5
         return processedData;
     } else { // 'yearly' mode
       const yearlyDataMap: { [year: number]: { totalRevenue: number; monthlyData: FinMindMonthlyRevenueData[] } } = {};
 
       data.forEach(item => {
         const year = item.revenue_year;
-        const revenue = parseFloat(String(item.revenue)) / 1000; // Convert to thousands
+        const revenue = parseFloat(String(item.revenue)) / 1000; // Re-add: Convert to thousands (千元)
 
         if (!yearlyDataMap[year]) {
           yearlyDataMap[year] = { totalRevenue: 0, monthlyData: [] };
@@ -127,12 +124,14 @@ export default function FinancialDataPage() {
       });
 
       // Filter to the last 5 years from the latest data point
-      const currentYear = new Date().getFullYear();
-      const fiveYearsAgo = currentYear - 4; // Including current year for 5 years total if data exists
+      const latestDataYear = data.reduce((maxYear, item) => Math.max(maxYear, item.revenue_year), 0); // Find the latest year from the data
+      const fiveYearsAgo = latestDataYear - 4; // Including current year for 5 years total if data exists
 
       const filteredAndSlicedData = yearlyChartData.filter(item => new Date(item.date).getFullYear() >= fiveYearsAgo)
                              .slice(-5); // Ensure only the last 5 are shown if more are filtered
-      console.log("processChartData - Yearly Mode Result:", filteredAndSlicedData);
+      console.log("processChartData - Yearly Mode Result (sample):");
+      filteredAndSlicedData.slice(0, 5).forEach(d => console.log(d)); // Log first 5
+      filteredAndSlicedData.slice(-5).forEach(d => console.log(d)); // Log last 5
       return filteredAndSlicedData;
     }
   };
@@ -140,7 +139,7 @@ export default function FinancialDataPage() {
   // Process data for table and chart only when data is available
   const rawTableData: TableDisplayData[] = finMindData ? finMindData
     .map((item: FinMindMonthlyRevenueData) => {
-      const parsedRevenue = parseFloat(String(item.revenue)) / 1000; // Convert to thousands for table
+      const parsedRevenue = parseFloat(String(item.revenue)) / 1000; // Re-add: Convert to thousands (千元) for table
       const calculatedYoyGrowth = calculateYoyGrowth(item, finMindData);
 
       return {
@@ -155,21 +154,24 @@ export default function FinancialDataPage() {
   useEffect(() => {
     console.log("Raw Table Data:", rawTableData);
     console.log("Chart Data:", chartData);
+    console.log("Chart Data Length:", chartData.length);
   }, [rawTableData, chartData]);
 
   const formatMonthlyRevenue = (value: number) => {
-    return value.toLocaleString(); // Only format with commas, remove '千元' here
+    return value.toLocaleString(); // Only format with commas, no units here (unit handled by Typography at top)
   };
 
   const formatYoYGrowth = (value: number) => {
     return `${value}%`;
   };
 
-  const formatXAxisTick = (tickItem: number) => {
+  const formatXAxisTick = (tickItem: number, viewMode: 'monthly' | 'yearly') => {
     const date = new Date(tickItem);
     if (viewMode === 'monthly') {
-      return `${date.getFullYear().toString().slice(2)}${('0' + (date.getMonth() + 1)).slice(-2)}`; // YYMM format
-    } else { // yearly
+      const year = date.getFullYear() % 100;
+      const month = date.getMonth() + 1;
+      return `${year < 10 ? '0' : ''}${year}${(month < 10 ? '0' : '')}${month}`; // YYMM format
+    } else {
       return `${date.getFullYear()}`; // YYYY format
     }
   };
@@ -231,7 +233,7 @@ export default function FinancialDataPage() {
               <Typography color="error">加载数据失败: {error}</Typography>
             </Box>
           )}
-          {!loading && !error && finMindData && finMindData.length > 0 && hasMounted ? (
+          {!loading && !error && finMindData && finMindData.length > 0 && chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
                 <ComposedChart
@@ -245,16 +247,16 @@ export default function FinancialDataPage() {
                     dataKey="date"
                     type="number"
                     scale="time"
-                    tickFormatter={formatXAxisTick}
+                    tickFormatter={(tick) => formatXAxisTick(tick, viewMode)}
                     domain={['dataMin', 'dataMax']}
                     stroke="#ccc"
                     tickLine={false}
                   />
-                  <YAxis yAxisId="left" orientation="left" stroke="#ccc" tickFormatter={formatMonthlyRevenue} domain={[0, 20000000]} />
-                  <YAxis yAxisId="right" orientation="right" stroke="#ccc" tickFormatter={formatYoYGrowth} label={{ value: '% ', angle: 0, position: 'top' }} />
+                  <YAxis yAxisId="left" orientation="left" stroke="#ccc" tickFormatter={formatMonthlyRevenue} domain={['auto', 'auto']} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#ccc" tickFormatter={formatYoYGrowth} />
                   <Tooltip formatter={(value: number, name: string) => {
                     if (name === '每月营收') {
-                      return [formatMonthlyRevenue(value), name];
+                      return [formatMonthlyRevenue(value), name]; // Removed '千元' from tooltip, as it's implicit by data scale
                     } else if (name === '单月营收年增率 (%)') {
                       return [formatYoYGrowth(value), name];
                     }
@@ -268,13 +270,9 @@ export default function FinancialDataPage() {
                 <Typography variant="caption" sx={{ position: 'absolute', top: 0, right: 0, mr: 2, mt: 1 }}>%</Typography>
               </Box>
             </ResponsiveContainer>
-          ) : !loading && !error && ( // No data message or not mounted yet
+          ) : (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-              {!hasMounted ? (
-                <Typography color="text.secondary">图表正在加载...</Typography>
-              ) : (
-                <Typography color="text.secondary">暂无数据</Typography>
-              )}
+              <Typography color="text.secondary">暂无数据</Typography>
             </Box>
           )}
         </Box>
