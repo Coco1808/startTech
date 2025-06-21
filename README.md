@@ -37,7 +37,7 @@ npm install
 npm run dev
 ```
 
-启动成功后，在浏览器中打开 [http://localhost:3000](http://localhost:3000) 即可看到应用页面。
+启动成功后，在浏览器中打开 [http://localhost:3000/financial-data](http://localhost:3000/financial-data) 即可看到应用页面。
 
 ---
 
