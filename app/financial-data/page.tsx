@@ -1,307 +1,218 @@
 'use client';
-import React, { useState, useEffect } from 'react';
-import { Box, Typography, TextField, Button, Card, TableContainer, Table, TableHead, TableRow, TableCell, TableBody, InputAdornment, CircularProgress } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import { Box, Typography, TextField, Button, Card, TableContainer, Table, TableHead, TableRow, TableCell, TableBody, InputAdornment, CircularProgress, MenuItem, Select, FormControl, InputLabel, Autocomplete } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import { ResponsiveContainer, ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
-import { useFinMindData } from '../../lib/hooks/useFinMindData';
 
-// Define an interface for the FinMind API monthly revenue data
-interface FinMindMonthlyRevenueData {
-  date: string;
-  stock_id: string;
-  revenue: number | string | null | undefined;
-  revenue_month: number;
-  revenue_year: number;
-}
-
-// Define an interface for the processed data for table display
-interface TableDisplayData {
-  yearMonth: string;
-  monthlyRevenue: string;
-  yoyGrowth: string;
-}
-
-// Define an interface for the processed data for chart display
-interface ChartDisplayData {
-  date: number;
-  monthlyRevenue: number;
-  yoyGrowth: number;
-}
+const PERIOD_OPTIONS = [
+  { label: '近 1 年', value: 12 },
+  { label: '近 3 年', value: 36 },
+  { label: '近 5 年', value: 60 },
+  //{ label: '全部', value: 9999 },
+];
 
 export default function FinancialDataPage() {
-  const stockId = '2867'; // 三商壽的股票代碼
-  const { data: finMindData, loading, error } = useFinMindData(stockId, '2019-01-01', new Date().toISOString().slice(0, 10));
+  const [allStocks, setAllStocks] = useState<any[]>([]);
+  const [selectedStock, setSelectedStock] = useState<any | null>({ stock_id: '2867', stock_name: '三商壽' });
+  const [data, setData] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState(PERIOD_OPTIONS[2].value); // 默认近5年
+  const [showYoyLine, setShowYoyLine] = useState(true);
 
-  const [viewMode, setViewMode] = useState<'monthly' | 'yearly'>('monthly'); // Added state for view mode
-
-  // Add console logs for debugging
+  // 获取所有股票列表
   useEffect(() => {
-    if (finMindData) {
-      console.log("FinMind Raw Data:", finMindData);
-    }
-    console.log(`Rendering Chart: loading=${loading}, error=${error}, finMindData=${!!finMindData}, finMindData.length=${finMindData ? finMindData.length : 0}`);
-  }, [finMindData, loading, error]);
+    fetch('https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo')
+      .then(res => res.json())
+      .then(res => {
+        if (res.status === 200 && Array.isArray(res.data)) {
+          // 关键：去重，防止 'duplicate key' 报错
+          const uniqueStocks = Array.from(new Map(res.data.map((item: any) => [item.stock_id, item])).values());
+          setAllStocks(uniqueStocks);
+        }
+      });
+  }, []);
 
-  // Helper function to calculate Year-over-Year Growth (YoY)
-  const calculateYoyGrowth = (currentItem: FinMindMonthlyRevenueData, allData: FinMindMonthlyRevenueData[]): number | null => {
-    const currentRevenue = parseFloat(String(currentItem.revenue));
-    if (isNaN(currentRevenue)) return null;
+  // 根据选择的股票获取营收数据
+  useEffect(() => {
+    if (!selectedStock?.stock_id) return;
 
-    const previousYearItem = allData.find(item =>
-      item.revenue_year === currentItem.revenue_year - 1 &&
-      item.revenue_month === currentItem.revenue_month
-    );
+    setLoading(true);
+    setError(null);
+    fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockMonthRevenue&data_id=${selectedStock.stock_id}&start_date=2015-01-01`)
+      .then(res => res.json())
+      .then(res => {
+        if (res.status === 200 && Array.isArray(res.data)) {
+          setData(res.data);
+        } else {
+          setData([]); // 清空旧数据
+          setError(res.msg || '请求营收数据失败');
+        }
+      })
+      .catch(e => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [selectedStock]);
 
-    if (previousYearItem) {
-      const previousYearRevenue = parseFloat(String(previousYearItem.revenue));
-      if (!isNaN(previousYearRevenue) && previousYearRevenue !== 0) {
-        return ((currentRevenue / previousYearRevenue) - 1) * 100;
+  // 处理图表和表格数据
+  const processed = React.useMemo(() => {
+    if (!data.length) return { chartData: [], tableData: [] };
+    const sorted = [...data].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const chartData = sorted.map((item, idx, arr) => {
+      const date = new Date(item.date);
+      const revenue = parseFloat(item.revenue);
+      const lastYear = date.getFullYear() - 1;
+      const lastYearMonth = arr.find(d => {
+        const dDate = new Date(d.date);
+        return dDate.getFullYear() === lastYear && dDate.getMonth() === date.getMonth();
+      });
+      const lastYearRevenue = lastYearMonth ? parseFloat(lastYearMonth.revenue) : null;
+      let yoy = null;
+      if (lastYearRevenue && lastYearRevenue !== 0) {
+        yoy = ((revenue / lastYearRevenue - 1) * 100);
       }
-    }
-    return null;
-  };
-
-  const processChartData = (data: FinMindMonthlyRevenueData[], mode: 'monthly' | 'yearly'): ChartDisplayData[] => {
-    console.log(`processChartData called with mode: ${mode}, data length: ${data ? data.length : 0}`);
-    if (!data || data.length === 0) {
-      console.log("processChartData: No data received or data is empty.");
-      return [];
-    }
-
-    if (mode === 'monthly') {
-      const processedData = data
-        .map(item => {
-          const date = new Date(item.date as string);
-          const parsedMonthlyRevenue = parseFloat(String(item.revenue)) / 1000; // Re-add: Convert to thousands (千元)
-          const calculatedYoyGrowth = calculateYoyGrowth(item, data);
-
-          return {
-            date: date.getTime(),
-            monthlyRevenue: !isNaN(parsedMonthlyRevenue) ? parsedMonthlyRevenue : 0,
-            yoyGrowth: calculatedYoyGrowth != null ? calculatedYoyGrowth : 0,
-          };
-        })
-        .sort((a, b) => a.date - b.date);
-        console.log("processChartData - Monthly Mode Result (sample):");
-        processedData.slice(0, 5).forEach(d => console.log(d)); // Log first 5
-        processedData.slice(-5).forEach(d => console.log(d)); // Log last 5
-        return processedData;
-    } else { // 'yearly' mode
-      const yearlyDataMap: { [year: number]: { totalRevenue: number; monthlyData: FinMindMonthlyRevenueData[] } } = {};
-
-      data.forEach(item => {
-        const year = item.revenue_year;
-        const revenue = parseFloat(String(item.revenue)) / 1000; // Re-add: Convert to thousands (千元)
-
-        if (!yearlyDataMap[year]) {
-          yearlyDataMap[year] = { totalRevenue: 0, monthlyData: [] };
-        }
-        if (!isNaN(revenue)) {
-          yearlyDataMap[year].totalRevenue += revenue;
-        }
-        yearlyDataMap[year].monthlyData.push(item);
-      });
-
-      const yearlyChartData: ChartDisplayData[] = [];
-      const years = Object.keys(yearlyDataMap).map(Number).sort((a, b) => a - b);
-
-      years.forEach(year => {
-        const currentYearRevenue = yearlyDataMap[year].totalRevenue;
-        let yearlyYoyGrowth: number | null = null;
-
-        if (yearlyDataMap[year - 1]) {
-          const previousYearRevenue = yearlyDataMap[year - 1].totalRevenue;
-          if (previousYearRevenue !== 0) {
-            yearlyYoyGrowth = ((currentYearRevenue / previousYearRevenue) - 1) * 100;
-          }
-        }
-
-        yearlyChartData.push({
-          date: new Date(year, 0, 1).getTime(), // Start of the year
-          monthlyRevenue: currentYearRevenue, // Represents yearly total now
-          yoyGrowth: yearlyYoyGrowth != null ? yearlyYoyGrowth : 0,
-        });
-      });
-
-      // Filter to the last 5 years from the latest data point
-      const latestDataYear = data.reduce((maxYear, item) => Math.max(maxYear, item.revenue_year), 0); // Find the latest year from the data
-      const fiveYearsAgo = latestDataYear - 4; // Including current year for 5 years total if data exists
-
-      const filteredAndSlicedData = yearlyChartData.filter(item => new Date(item.date).getFullYear() >= fiveYearsAgo)
-                             .slice(-5); // Ensure only the last 5 are shown if more are filtered
-      console.log("processChartData - Yearly Mode Result (sample):");
-      filteredAndSlicedData.slice(0, 5).forEach(d => console.log(d)); // Log first 5
-      filteredAndSlicedData.slice(-5).forEach(d => console.log(d)); // Log last 5
-      return filteredAndSlicedData;
-    }
-  };
-
-  // Process data for table and chart only when data is available
-  const rawTableData: TableDisplayData[] = finMindData ? finMindData
-    .map((item: FinMindMonthlyRevenueData) => {
-      const parsedRevenue = parseFloat(String(item.revenue)) / 1000; // Re-add: Convert to thousands (千元) for table
-      const calculatedYoyGrowth = calculateYoyGrowth(item, finMindData);
-
       return {
-        yearMonth: `${item.revenue_year}${('0' + item.revenue_month).slice(-2)}`,
-        monthlyRevenue: !isNaN(parsedRevenue) ? parsedRevenue.toLocaleString() : '--',
-        yoyGrowth: calculatedYoyGrowth != null ? calculatedYoyGrowth.toFixed(2) : '--',
+        date: item.date,
+        yearMonth: `${date.getFullYear()}-${('0' + (date.getMonth() + 1)).slice(-2)}`,
+        revenue,
+        yoy,
       };
-    }).sort((a: TableDisplayData, b: TableDisplayData) => b.yearMonth.localeCompare(a.yearMonth)) : [];
-
-  const chartData: ChartDisplayData[] = processChartData(finMindData || [], viewMode);
-
-  useEffect(() => {
-    console.log("Raw Table Data:", rawTableData);
-    console.log("Chart Data:", chartData);
-    console.log("Chart Data Length:", chartData.length);
-  }, [rawTableData, chartData]);
-
-  const formatMonthlyRevenue = (value: number) => {
-    return value.toLocaleString(); // Only format with commas, no units here (unit handled by Typography at top)
-  };
-
-  const formatYoYGrowth = (value: number) => {
-    return `${value}%`;
-  };
-
-  const formatXAxisTick = (tickItem: number, viewMode: 'monthly' | 'yearly') => {
-    const date = new Date(tickItem);
-    if (viewMode === 'monthly') {
-      const year = date.getFullYear() % 100;
-      const month = date.getMonth() + 1;
-      return `${year < 10 ? '0' : ''}${year}${(month < 10 ? '0' : '')}${month}`; // YYMM format
-    } else {
-      return `${date.getFullYear()}`; // YYYY format
-    }
-  };
+    });
+    const filtered = chartData.slice(-period);
+    const tableData = filtered.map(d => ({
+      yearMonth: d.yearMonth,
+      revenue: d.revenue ? d.revenue.toLocaleString() : '--',
+      yoy: d.yoy !== null && d.yoy !== undefined ? d.yoy.toFixed(2) : '--',
+    }));
+    return { chartData: filtered, tableData };
+  }, [data, period]);
 
   return (
     <Box sx={{ p: 4, bgcolor: '#f0f2f5', minHeight: '100vh' }}>
       {/* Search Bar */}
       <Box sx={{ display: 'flex', justifyContent: 'center', mb: 4 }}>
-        <TextField
-          variant="outlined"
-          placeholder="输入台 / 美股代号，查看公司价值"
-          sx={{ width: '600px', bgcolor: 'white', borderRadius: 1 }}
-          InputProps={{
-            endAdornment: (
-              <InputAdornment position="end">
-                <SearchIcon />
-              </InputAdornment>
-            ),
+        <Autocomplete
+          options={allStocks}
+          getOptionLabel={(option) => `${option.stock_id} ${option.stock_name}` || ''}
+          value={selectedStock}
+          onChange={(event, newValue) => {
+            setSelectedStock(newValue);
           }}
+          isOptionEqualToValue={(option, value) => option.stock_id === value.stock_id}
+          renderInput={(params) => (
+            <TextField {...params} label="输入台 / 美股代号，查看公司价值" variant="outlined" />
+          )}
+          sx={{ width: '600px', bgcolor: 'white', borderRadius: 1 }}
+          noOptionsText="无此股票"
         />
       </Box>
 
+      <Typography variant="h5" component="h2" sx={{ mb: 3, marginBottom:'10px', backgroundColor:'#fff', padding:'15px 20px',borderRadius: 2 }}>
+          {selectedStock ? `${selectedStock.stock_name} (${selectedStock.stock_id})` : '请选择股票'}
+        </Typography>
       {/* Company Data Card */}
       <Card sx={{ p: 3, mb: 4, borderRadius: 2, boxShadow: 3 }}>
-        <Typography variant="h5" component="h2" sx={{ mb: 3 }}>
-          三商壽 (2867)
-        </Typography>
+        
 
-        {/* Monthly Revenue Section */}
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2, gap: 1 }}>
-          <Button
-            variant={viewMode === 'monthly' ? 'contained' : 'outlined'}
-            disableElevation
-            sx={{ minWidth: 100 }}
-            onClick={() => setViewMode('monthly')}
-          >
-            每月营收
-          </Button>
-          <Button
-            variant={viewMode === 'yearly' ? 'contained' : 'outlined'}
-            disableElevation
-            sx={{ minWidth: 80 }}
-            onClick={() => setViewMode('yearly')}
-          >
-            近 5 年
-          </Button>
+        {/* Monthly Revenue Section + 下拉选单 + 切换按钮 */}
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+          <Box>
+            <Button
+              variant={!showYoyLine ? "contained" : "outlined"}
+              disableElevation
+              onClick={() => setShowYoyLine(false)}
+              sx={{ mr: 1 }}
+            >
+              每月营收
+            </Button>
+            <Button
+              variant={showYoyLine ? "contained" : "outlined"}
+              disableElevation
+              onClick={() => setShowYoyLine(true)}
+            >
+              全部
+            </Button>
+          </Box>
+          <FormControl size="small">
+            <InputLabel>区间</InputLabel>
+            <Select
+              value={period}
+              label="区间"
+              onChange={e => setPeriod(Number(e.target.value))}
+              sx={{ minWidth: 100 }}
+            >
+              {PERIOD_OPTIONS.map(opt => (
+                <MenuItem key={opt.value} value={opt.value}>{opt.label}</MenuItem>
+              ))}
+            </Select>
+          </FormControl>
         </Box>
 
         {/* Chart */}
-        <Box sx={{ height: 400, width: '100%', mb: 4 }}>
-          {loading && (
+        <Box sx={{ height: 400, width: '100%', mb: 4, bgcolor: '#fff', borderRadius: 2 }}>
+          {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
               <CircularProgress />
-              <Typography sx={{ ml: 2 }}>加载数据中...</Typography>
             </Box>
-          )}
-          {error && (
+          ) : error ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-              <Typography color="error">加载数据失败: {error}</Typography>
+              <Typography color="error">{error}</Typography>
             </Box>
-          )}
-          {!loading && !error && finMindData && finMindData.length > 0 && chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height="100%">
-              <Box sx={{ position: 'relative', width: '100%', height: '100%' }}>
-                <ComposedChart
-                  data={chartData}
-                  margin={{
-                    top: 20, right: 30, left: 60, bottom: 5,
-                  }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis
-                    dataKey="date"
-                    type="number"
-                    scale="time"
-                    tickFormatter={(tick) => formatXAxisTick(tick, viewMode)}
-                    domain={['dataMin', 'dataMax']}
-                    stroke="#ccc"
-                    tickLine={false}
-                  />
-                  <YAxis yAxisId="left" orientation="left" stroke="#ccc" tickFormatter={formatMonthlyRevenue} domain={['auto', 'auto']} />
-                  <YAxis yAxisId="right" orientation="right" stroke="#ccc" tickFormatter={formatYoYGrowth} />
-                  <Tooltip formatter={(value: number, name: string) => {
-                    if (name === '每月营收') {
-                      return [formatMonthlyRevenue(value), name]; // Removed '千元' from tooltip, as it's implicit by data scale
-                    } else if (name === '单月营收年增率 (%)') {
-                      return [formatYoYGrowth(value), name];
-                    }
-                    return [value, name];
-                  }} />
-                  <Legend verticalAlign="top" align="right" wrapperStyle={{ top: 0, right: 0 }} />
-                  <Bar yAxisId="left" dataKey="monthlyRevenue" fill="#ffc658" name="每月营收" />
-                  <Line yAxisId="right" type="monotone" dataKey="yoyGrowth" stroke="#DC3545" name="单月营收年增率 (%)" strokeWidth={2} />
-                </ComposedChart>
-                <Typography variant="caption" sx={{ position: 'absolute', top: 0, left: 0, ml: 2, mt: 1 }}>千元</Typography>
-                <Typography variant="caption" sx={{ position: 'absolute', top: 0, right: 0, mr: 2, mt: 1 }}>%</Typography>
-              </Box>
-            </ResponsiveContainer>
           ) : (
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-              <Typography color="text.secondary">暂无数据</Typography>
-            </Box>
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={processed.chartData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="yearMonth" tick={{ fontSize: 14 }} />
+                <YAxis
+                  yAxisId="left"
+                  orientation="left"
+                  stroke="#ffc658"
+                  tickFormatter={v => (typeof v === 'number' && !isNaN(v) ? v.toLocaleString() : '')}
+                  label={{ value: '千元', angle: 0, position: 'top', fontSize: 16, offset: 10, dy: 10 }}
+                  tick={{ fontSize: 14 }}
+                />
+                <YAxis
+                  yAxisId="right"
+                  orientation="right"
+                  stroke="#c44d58"
+                  domain={[4, 13]}
+                  tickFormatter={v => (typeof v === 'number' && !isNaN(v) ? v.toFixed(1) + '%' : '')}
+                  label={{ value: '%', angle: 90, position: 'insideRight', fontSize: 16 }}
+                  tick={{ fontSize: 14 }}
+                />
+                <Tooltip formatter={(value, name) => {
+                  if (name === '每月营收') return [Number(value).toLocaleString(), name];
+                  if (name === '单月营收年增率 (%)') return [`${Number(value).toFixed(2)}%`, name];
+                  return [value, name];
+                }} />
+                <Legend />
+                <Bar yAxisId="left" dataKey="revenue" fill="#ffc658" name="每月营收" barSize={16} />
+                {showYoyLine && (
+                  <Line yAxisId="right" type="monotone" dataKey="yoy" stroke="#c44d58" strokeWidth={3} dot={false} name="单月营收年增率 (%)" />
+                )}
+              </ComposedChart>
+            </ResponsiveContainer>
           )}
         </Box>
 
-        {/* Detailed Data Section */}
+        {/* Data Table */}
         <Button variant="contained" disableElevation sx={{ mb: 2 }}>详细数据</Button>
-        <TableContainer component={Card} sx={{ borderRadius: 2, boxShadow: 1, border: '1px solid #e0e0e0' }}>
-          <Table>
+        <TableContainer component={Card} sx={{ borderRadius: 2, boxShadow: 1 }}>
+          <Table size="small">
             <TableHead sx={{ bgcolor: '#f5f5f5' }}>
               <TableRow>
                 <TableCell>年度月份</TableCell>
-                {rawTableData.map((data: TableDisplayData, index: number) => (
-                  <TableCell key={index} align="right">{data.yearMonth}</TableCell>
-                ))}
+                <TableCell align="right">每月营收</TableCell>
+                <TableCell align="right">单月营收年增率 (%)</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              <TableRow>
-                <TableCell>每月营收</TableCell>
-                {rawTableData.map((data: TableDisplayData, index: number) => (
-                  <TableCell key={index} align="right">{data.monthlyRevenue}</TableCell>
-                ))}
-              </TableRow>
-              <TableRow>
-                <TableCell>单月营收年增率 (%)</TableCell>
-                {rawTableData.map((data: TableDisplayData, index: number) => (
-                  <TableCell key={index} align="right">{data.yoyGrowth}</TableCell>
-                ))}
-              </TableRow>
+              {processed.tableData.map((row, idx) => (
+                <TableRow key={idx}>
+                  <TableCell>{row.yearMonth}</TableCell>
+                  <TableCell align="right">{row.revenue}</TableCell>
+                  <TableCell align="right">{row.yoy}</TableCell>
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </TableContainer>
@@ -314,4 +225,4 @@ export default function FinancialDataPage() {
       </Box>
     </Box>
   );
-} 
+}
